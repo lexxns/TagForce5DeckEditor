@@ -14,7 +14,8 @@ public class SQLiteWrapper {
     private final List<Statement> openStatements;
     private final List<ResultSet> openResultSets;
 
-    public SQLiteWrapper(String dbFilePath) {
+    public SQLiteWrapper(String dbFilePath) throws ClassNotFoundException {
+        Class.forName("org.sqlite.JDBC");
         connectionString = "jdbc:sqlite:" + dbFilePath;
         openStatements = new ArrayList<>();
         openResultSets = new ArrayList<>();
