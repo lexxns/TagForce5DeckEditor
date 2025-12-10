@@ -15,6 +15,7 @@ import javafx.stage.Stage;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.prefs.Preferences;
 
@@ -24,14 +25,13 @@ public class TagForceEditor extends Application {
     private final Preferences prefs = Preferences.userNodeForPackage(TagForceEditor.class);
 
     private File currentFile;
-    private byte[] fileData;
-    private SaveGameParser parser;
 
     private Label filePathLabel;
     private ListView<DeckRecipe> recipeListView;
     private TextArea deckDetailsArea;
     private Button loadButton;
-    private Button browseButton;
+
+    private CardIDMapper cardIDMapper;
 
     @Override
     public void start(Stage primaryStage) {
@@ -67,6 +67,12 @@ public class TagForceEditor extends Application {
         primaryStage.setScene(scene);
         primaryStage.show();
 
+        try {
+            cardIDMapper = new CardIDMapper();
+        } catch (SQLException | ClassNotFoundException e) {
+            throw new RuntimeException(e);
+        }
+
         // Try to load last used file
         tryLoadLastFile();
     }
@@ -89,21 +95,21 @@ public class TagForceEditor extends Application {
         filePathLabel.setMaxWidth(500);
         HBox.setHgrow(filePathLabel, Priority.ALWAYS);
 
-        browseButton = new Button("Browse...");
+        Button browseButton = new Button("Browse...");
         browseButton.setStyle("-fx-background-color: #e94560; -fx-text-fill: white; -fx-font-weight: bold; " +
                 "-fx-padding: 8 16; -fx-background-radius: 4; -fx-cursor: hand;");
-        browseButton.setOnAction(e -> browseForFile(stage));
+        browseButton.setOnAction(_ -> browseForFile(stage));
 
         loadButton = new Button("Reload");
         loadButton.setStyle("-fx-background-color: #e94560; -fx-text-fill: white; -fx-font-weight: bold; " +
                 "-fx-padding: 8 16; -fx-background-radius: 4; -fx-cursor: hand;");
         loadButton.setDisable(true);
-        loadButton.setOnAction(e -> loadCurrentFile());
+        loadButton.setOnAction(_ -> loadCurrentFile());
 
         Button clearPrefButton = new Button("Clear Saved Path");
         clearPrefButton.setStyle("-fx-background-color: #0f4c75; -fx-text-fill: #a0d0e0; -fx-font-size: 11; " +
                 "-fx-padding: 6 12; -fx-background-radius: 4; -fx-cursor: hand;");
-        clearPrefButton.setOnAction(e -> {
+        clearPrefButton.setOnAction(_ -> {
             prefs.remove(PREF_LAST_FILE);
             showAlert(Alert.AlertType.INFORMATION, "Preference Cleared", "Saved file path has been cleared.");
         });
@@ -125,9 +131,15 @@ public class TagForceEditor extends Application {
         recipeListView = new ListView<>();
         recipeListView.setPlaceholder(new Label("Load a .YGR file to see recipes"));
         recipeListView.setStyle("-fx-background-color: #16213e; -fx-background-insets: 0;");
-        recipeListView.setCellFactory(lv -> new RecipeListCell());
+        recipeListView.setCellFactory(_ -> new RecipeListCell());
         recipeListView.getSelectionModel().selectedItemProperty().addListener(
-                (obs, oldVal, newVal) -> showDeckDetails(newVal)
+                (_, _, newVal) -> {
+                    try {
+                        showDeckDetails(newVal);
+                    } catch (SQLException e) {
+                        throw new RuntimeException(e);
+                    }
+                }
         );
         VBox.setVgrow(recipeListView, Priority.ALWAYS);
 
@@ -202,8 +214,8 @@ public class TagForceEditor extends Application {
         }
 
         try {
-            fileData = Files.readAllBytes(currentFile.toPath());
-            parser = new SaveGameParser(fileData);
+            byte[] fileData = Files.readAllBytes(currentFile.toPath());
+            SaveGameParser parser = new SaveGameParser(fileData);
 
             filePathLabel.setText(currentFile.getAbsolutePath());
             filePathLabel.setTextFill(Color.web("#4ecca3"));
@@ -235,7 +247,7 @@ public class TagForceEditor extends Application {
         }
     }
 
-    private void showDeckDetails(DeckRecipe recipe) {
+    private void showDeckDetails(DeckRecipe recipe) throws SQLException {
         if (recipe == null) {
             deckDetailsArea.setText("");
             return;
@@ -254,15 +266,15 @@ public class TagForceEditor extends Application {
         sb.append("Card Data: 0x").append(String.format("%04X", recipe.getCardDataOffset())).append("\n\n");
 
         sb.append("┌─ Deck Composition ─────────┐\n");
-        sb.append("│  Main Deck:  ").append(String.format("%3d", recipe.getMainDeckCount())).append(" cards    │\n");
-        sb.append("│  Extra Deck: ").append(String.format("%3d", recipe.getExtraDeckCount())).append(" cards    │\n");
-        sb.append("│  Side Deck:  ").append(String.format("%3d", recipe.getSideDeckCount())).append(" cards    │\n");
+        sb.append("│  Main Deck:  ").append(String.format("%3d", recipe.getMainDeckCount())).append(" cards     │\n");
+        sb.append("│  Extra Deck: ").append(String.format("%3d", recipe.getExtraDeckCount())).append(" cards     │\n");
+        sb.append("│  Side Deck:  ").append(String.format("%3d", recipe.getSideDeckCount())).append(" cards     │\n");
         sb.append("│  ─────────────────────     │\n");
-        sb.append("│  Total:      ").append(String.format("%3d", recipe.getTotalCardCount())).append(" cards    │\n");
+        sb.append("│  Total:      ").append(String.format("%3d", recipe.getTotalCardCount())).append(" cards     │\n");
         sb.append("└────────────────────────────┘\n\n");
 
         if (!recipe.getMainDeckIds().isEmpty()) {
-            sb.append("Main Deck Card IDs:\n");
+            sb.append("Main Deck Cards:\n");
             sb.append(formatCardIds(recipe.getMainDeckIds()));
             sb.append("\n");
         }
@@ -281,10 +293,11 @@ public class TagForceEditor extends Application {
         deckDetailsArea.setText(sb.toString());
     }
 
-    private String formatCardIds(List<Integer> ids) {
+    private String formatCardIds(List<Integer> ids) throws SQLException {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < ids.size(); i++) {
-            sb.append(String.format("%5d", ids.get(i)));
+            String cardName = cardIDMapper.cardName(ids.get(i));
+            sb.append(cardName);
             if ((i + 1) % 8 == 0) {
                 sb.append("\n");
             } else if (i < ids.size() - 1) {
