@@ -30,6 +30,7 @@ public class TagForceEditor extends Application {
     private ListView<DeckRecipe> recipeListView;
     private TextArea deckDetailsArea;
     private Button loadButton;
+    private Button replaceSelectedButton;
 
     private CardIDMapper cardIDMapper;
 
@@ -165,8 +166,81 @@ public class TagForceEditor extends Application {
         deckDetailsArea.setPromptText("Select a recipe to view details");
         VBox.setVgrow(deckDetailsArea, Priority.ALWAYS);
 
-        rightBox.getChildren().addAll(detailsLabel, deckDetailsArea);
+        // Add Replace Selected button
+        replaceSelectedButton = new Button("Replace Selected...");
+        replaceSelectedButton.setStyle("-fx-background-color: #4ecca3; -fx-text-fill: #1a1a2e; -fx-font-weight: bold; " +
+                "-fx-padding: 10 20; -fx-background-radius: 4; -fx-cursor: hand;");
+        replaceSelectedButton.setMaxWidth(Double.MAX_VALUE);
+        replaceSelectedButton.setDisable(true);  // Disabled until a recipe is selected
+        replaceSelectedButton.setOnAction(_ -> {
+            try {
+                loadYDKFile();
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
+        });
+
+        rightBox.getChildren().addAll(detailsLabel, deckDetailsArea, replaceSelectedButton);
         return rightBox;
+    }
+
+    private void loadYDKFile() throws SQLException {
+        DeckRecipe selectedRecipe = recipeListView.getSelectionModel().getSelectedItem();
+        if (selectedRecipe == null) {
+            showAlert(Alert.AlertType.WARNING, "No Selection", "Please select a recipe slot to replace.");
+            return;
+        }
+
+        FileChooser fileChooser = new FileChooser();
+        fileChooser.setTitle("Open YDK Deck File");
+        fileChooser.getExtensionFilters().addAll(
+                new FileChooser.ExtensionFilter("YDK Deck Files", "*.ydk", "*.YDK"),
+                new FileChooser.ExtensionFilter("All Files", "*.*")
+        );
+
+        File file = fileChooser.showOpenDialog(replaceSelectedButton.getScene().getWindow());
+        if (file != null) {
+            try {
+                YDKFile loadedYDK = YDKFile.parse(file);
+
+                // Show loaded deck info
+                StringBuilder sb = new StringBuilder();
+                sb.append("═══════════════════════════════\n");
+                sb.append("  YDK LOADED\n");
+                sb.append("═══════════════════════════════\n\n");
+                sb.append("Deck Name: ").append(loadedYDK.getDeckName()).append("\n");
+                sb.append("Target Slot: ").append(selectedRecipe.getSlotIndex()).append("\n\n");
+
+                formatDeckComposition(sb, loadedYDK.getMainDeckCount(), loadedYDK.getExtraDeckCount(), loadedYDK.getSideDeckCount(), loadedYDK.getTotalCardCount());
+
+                sb.append("Main Deck Cards:\n");
+                sb.append(formatYdkIds(loadedYDK.getMainDeck())).append("\n");
+
+                if (!loadedYDK.getExtraDeck().isEmpty()) {
+                    sb.append("Extra Deck Cards:\n");
+                    sb.append(formatYdkIds(loadedYDK.getExtraDeck())).append("\n");
+                }
+
+                if (!loadedYDK.getSideDeck().isEmpty()) {
+                    sb.append("Side Deck Cards:\n");
+                    sb.append(formatYdkIds(loadedYDK.getSideDeck()));
+                }
+
+                deckDetailsArea.setText(sb.toString());
+
+                showAlert(Alert.AlertType.INFORMATION, "YDK Loaded",
+                        String.format("Loaded '%s' (%d cards)\nReady to replace slot %d: %s",
+                                loadedYDK.getDeckName(),
+                                loadedYDK.getTotalCardCount(),
+                                selectedRecipe.getSlotIndex(),
+                                selectedRecipe.getName()));
+
+            } catch (IOException e) {
+                showAlert(Alert.AlertType.ERROR, "Read Error", "Failed to read YDK file: " + e.getMessage());
+            } catch (YDKFile.YDKParseException e) {
+                showAlert(Alert.AlertType.ERROR, "Parse Error", "Invalid YDK file: " + e.getMessage());
+            }
+        }
     }
 
     private void browseForFile(Stage stage) {
@@ -248,6 +322,9 @@ public class TagForceEditor extends Application {
     }
 
     private void showDeckDetails(DeckRecipe recipe) throws SQLException {
+        // Enable replace button only when a recipe is selected
+        replaceSelectedButton.setDisable(recipe == null);
+
         if (recipe == null) {
             deckDetailsArea.setText("");
             return;
@@ -265,38 +342,32 @@ public class TagForceEditor extends Application {
         sb.append("Data Offset: 0x").append(String.format("%04X", recipe.getDataOffset())).append("\n");
         sb.append("Card Data: 0x").append(String.format("%04X", recipe.getCardDataOffset())).append("\n\n");
 
-        sb.append("┌─ Deck Composition ─────────┐\n");
-        sb.append("│  Main Deck:  ").append(String.format("%3d", recipe.getMainDeckCount())).append(" cards     │\n");
-        sb.append("│  Extra Deck: ").append(String.format("%3d", recipe.getExtraDeckCount())).append(" cards     │\n");
-        sb.append("│  Side Deck:  ").append(String.format("%3d", recipe.getSideDeckCount())).append(" cards     │\n");
-        sb.append("│  ─────────────────────     │\n");
-        sb.append("│  Total:      ").append(String.format("%3d", recipe.getTotalCardCount())).append(" cards     │\n");
-        sb.append("└────────────────────────────┘\n\n");
+        formatDeckComposition(sb, recipe.getMainDeckCount(), recipe.getExtraDeckCount(), recipe.getSideDeckCount(), recipe.getTotalCardCount());
 
         if (!recipe.getMainDeckIds().isEmpty()) {
             sb.append("Main Deck Cards:\n");
-            sb.append(formatCardIds(recipe.getMainDeckIds()));
+            sb.append(formatTagForceIds(recipe.getMainDeckIds()));
             sb.append("\n");
         }
 
         if (!recipe.getExtraDeckIds().isEmpty()) {
             sb.append("Extra Deck Card IDs:\n");
-            sb.append(formatCardIds(recipe.getExtraDeckIds()));
+            sb.append(formatTagForceIds(recipe.getExtraDeckIds()));
             sb.append("\n");
         }
 
         if (!recipe.getSideDeckIds().isEmpty()) {
             sb.append("Side Deck Card IDs:\n");
-            sb.append(formatCardIds(recipe.getSideDeckIds()));
+            sb.append(formatTagForceIds(recipe.getSideDeckIds()));
         }
 
         deckDetailsArea.setText(sb.toString());
     }
 
-    private String formatCardIds(List<Integer> ids) throws SQLException {
+    private String formatTagForceIds(List<Integer> ids) throws SQLException {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < ids.size(); i++) {
-            String cardName = cardIDMapper.cardName(ids.get(i));
+            String cardName = cardIDMapper.cardNameFromTagForceId(ids.get(i));
             sb.append(cardName);
             if ((i + 1) % 8 == 0) {
                 sb.append("\n");
@@ -308,6 +379,33 @@ public class TagForceEditor extends Application {
             sb.append("\n");
         }
         return sb.toString();
+    }
+
+    private String formatYdkIds(List<Integer> ids) throws SQLException {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < ids.size(); i++) {
+            String cardName = cardIDMapper.cardNameFromYdkId(ids.get(i));
+            sb.append(cardName);
+            if ((i + 1) % 6 == 0) {
+                sb.append("\n");
+            } else if (i < ids.size() - 1) {
+                sb.append(", ");
+            }
+        }
+        if (ids.size() % 6 != 0) {
+            sb.append("\n");
+        }
+        return sb.toString();
+    }
+
+    private void formatDeckComposition(StringBuilder sb, int mainDeckCount, int extraDeckCount, int sideDeckCount, int totalCardCount) {
+        sb.append("┌─ Deck Composition ─────────┐\n");
+        sb.append("│  Main Deck:  ").append(String.format("%3d", mainDeckCount)).append(" cards     │\n");
+        sb.append("│  Extra Deck: ").append(String.format("%3d", extraDeckCount)).append(" cards     │\n");
+        sb.append("│  Side Deck:  ").append(String.format("%3d", sideDeckCount)).append(" cards     │\n");
+        sb.append("│  ─────────────────────     │\n");
+        sb.append("│  Total:      ").append(String.format("%3d", totalCardCount)).append(" cards     │\n");
+        sb.append("└────────────────────────────┘\n\n");
     }
 
     private void showAlert(Alert.AlertType type, String title, String content) {

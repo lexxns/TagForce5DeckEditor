@@ -25,10 +25,19 @@ public class CardIDMapper {
         wrapper.open();
     }
 
-    public String cardName(Integer cardId) throws SQLException {
+    public String cardNameFromTagForceId(Integer cardId) throws SQLException {
         SelectQuery query = new SelectQuery(table);
         query.field(cardName)
                 .where(String.format("%s = %s", tagForceId, cardId));
+        try (ResultSet results = wrapper.select(query)) {
+            return results.getString(cardName);
+        }
+    }
+
+    public String cardNameFromYdkId(Integer cardId) throws SQLException {
+        SelectQuery query = new SelectQuery(table);
+        query.field(cardName)
+                .where(String.format("%s = %s", ydkId, cardId));
         try (ResultSet results = wrapper.select(query)) {
             return results.getString(cardName);
         }
