@@ -102,22 +102,21 @@ public class SaveGameParser {
     public void writeDeck(int recipeOffset, List<Integer> mainDeck, List<Integer> sideDeck, List<Integer> extraDeck) {
         validateDeckSizes(mainDeck, sideDeck, extraDeck);
 
-        // Update count fields
+        // Update counts
         writeUInt16(recipeOffset + MAIN_COUNT_OFFSET, mainDeck.size());
         writeUInt16(recipeOffset + EXTRA_COUNT_OFFSET, extraDeck.size());
         writeUInt16(recipeOffset + SIDE_COUNT_OFFSET, sideDeck.size());
         writeUInt16(recipeOffset + MAIN_EXTRA_COUNT_OFFSET, mainDeck.size() + extraDeck.size());
 
-        // Zero out the entire card ID region first
+        // Clear entire card ID region
         int cardRegionStart = recipeOffset + CARD_IDS_OFFSET;
-        int cardRegionSize = MAX_TOTAL_CARDS * 2;
-        zeroRegion(cardRegionStart, cardRegionSize);
+        zeroRegion(cardRegionStart, MAX_TOTAL_CARDS * 2);
 
-        // Write card IDs: Main, then Extra, then Side
+        // Write CONTIGUOUSLY: Main → Extra → Side
         int offset = cardRegionStart;
-        offset = writeCardIds(offset, mainDeck);
-        offset = writeCardIds(offset, extraDeck);
-        writeCardIds(offset, sideDeck);
+        offset = writeCardIds(offset, mainDeck);    // Main deck
+        offset = writeCardIds(offset, extraDeck);   // Extra deck immediately after
+        writeCardIds(offset, sideDeck);             // Side deck immediately after extra
     }
 
     /**
