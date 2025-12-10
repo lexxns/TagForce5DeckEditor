@@ -33,6 +33,7 @@ public class TagForceEditor extends Application {
     private Button replaceSelectedButton;
 
     private CardIDMapper cardIDMapper;
+    private DeckDetailsFormatter formatter;
 
     @Override
     public void start(Stage primaryStage) {
@@ -41,21 +42,21 @@ public class TagForceEditor extends Application {
         BorderPane root = new BorderPane();
         root.setStyle("-fx-background-color: #1a1a2e;");
 
-        // Top section - File selection
-        VBox topSection = createTopSection(primaryStage);
-        root.setTop(topSection);
-
-        // Center section - Recipe list
-        VBox centerSection = createCenterSection();
-        root.setCenter(centerSection);
-
-        // Right section - Deck details
-        VBox rightSection = createRightSection();
-        root.setRight(rightSection);
+        root.setTop(createTopSection(primaryStage));
+        root.setCenter(createCenterSection());
+        root.setRight(createRightSection());
 
         Scene scene = new Scene(root, 900, 650);
+        loadStylesheet(scene);
 
-        // Apply styles inline for reliability (external CSS can be added later)
+        primaryStage.setScene(scene);
+        primaryStage.show();
+
+        initializeServices();
+        tryLoadLastFile();
+    }
+
+    private void loadStylesheet(Scene scene) {
         try {
             var cssUrl = getClass().getResource("/styles.css");
             if (cssUrl != null) {
@@ -64,18 +65,15 @@ public class TagForceEditor extends Application {
         } catch (Exception e) {
             System.out.println("CSS not loaded, using inline styles");
         }
+    }
 
-        primaryStage.setScene(scene);
-        primaryStage.show();
-
+    private void initializeServices() {
         try {
             cardIDMapper = new CardIDMapper();
+            formatter = new DeckDetailsFormatter(cardIDMapper);
         } catch (SQLException | ClassNotFoundException e) {
             throw new RuntimeException(e);
         }
-
-        // Try to load last used file
-        tryLoadLastFile();
     }
 
     private VBox createTopSection(Stage stage) {
@@ -96,14 +94,10 @@ public class TagForceEditor extends Application {
         filePathLabel.setMaxWidth(500);
         HBox.setHgrow(filePathLabel, Priority.ALWAYS);
 
-        Button browseButton = new Button("Browse...");
-        browseButton.setStyle("-fx-background-color: #e94560; -fx-text-fill: white; -fx-font-weight: bold; " +
-                "-fx-padding: 8 16; -fx-background-radius: 4; -fx-cursor: hand;");
+        Button browseButton = createStyledButton("Browse...", "#e94560", "white");
         browseButton.setOnAction(_ -> browseForFile(stage));
 
-        loadButton = new Button("Reload");
-        loadButton.setStyle("-fx-background-color: #e94560; -fx-text-fill: white; -fx-font-weight: bold; " +
-                "-fx-padding: 8 16; -fx-background-radius: 4; -fx-cursor: hand;");
+        loadButton = createStyledButton("Reload", "#e94560", "white");
         loadButton.setDisable(true);
         loadButton.setOnAction(_ -> loadCurrentFile());
 
@@ -116,7 +110,6 @@ public class TagForceEditor extends Application {
         });
 
         fileBox.getChildren().addAll(filePathLabel, browseButton, loadButton, clearPrefButton);
-
         topBox.getChildren().addAll(titleLabel, fileBox);
         return topBox;
     }
@@ -134,13 +127,7 @@ public class TagForceEditor extends Application {
         recipeListView.setStyle("-fx-background-color: #16213e; -fx-background-insets: 0;");
         recipeListView.setCellFactory(_ -> new RecipeListCell());
         recipeListView.getSelectionModel().selectedItemProperty().addListener(
-                (_, _, newVal) -> {
-                    try {
-                        showDeckDetails(newVal);
-                    } catch (SQLException e) {
-                        throw new RuntimeException(e);
-                    }
-                }
+                (_, _, newVal) -> onRecipeSelected(newVal)
         );
         VBox.setVgrow(recipeListView, Priority.ALWAYS);
 
@@ -166,25 +153,42 @@ public class TagForceEditor extends Application {
         deckDetailsArea.setPromptText("Select a recipe to view details");
         VBox.setVgrow(deckDetailsArea, Priority.ALWAYS);
 
-        // Add Replace Selected button
         replaceSelectedButton = new Button("Replace Selected...");
         replaceSelectedButton.setStyle("-fx-background-color: #4ecca3; -fx-text-fill: #1a1a2e; -fx-font-weight: bold; " +
                 "-fx-padding: 10 20; -fx-background-radius: 4; -fx-cursor: hand;");
         replaceSelectedButton.setMaxWidth(Double.MAX_VALUE);
-        replaceSelectedButton.setDisable(true);  // Disabled until a recipe is selected
-        replaceSelectedButton.setOnAction(_ -> {
-            try {
-                loadYDKFile();
-            } catch (SQLException e) {
-                throw new RuntimeException(e);
-            }
-        });
+        replaceSelectedButton.setDisable(true);
+        replaceSelectedButton.setOnAction(_ -> onReplaceSelected());
 
         rightBox.getChildren().addAll(detailsLabel, deckDetailsArea, replaceSelectedButton);
         return rightBox;
     }
 
-    private void loadYDKFile() throws SQLException {
+    private Button createStyledButton(String text, String bgColor, String textColor) {
+        Button button = new Button(text);
+        button.setStyle(String.format(
+                "-fx-background-color: %s; -fx-text-fill: %s; -fx-font-weight: bold; " +
+                        "-fx-padding: 8 16; -fx-background-radius: 4; -fx-cursor: hand;",
+                bgColor, textColor));
+        return button;
+    }
+
+    private void onRecipeSelected(DeckRecipe recipe) {
+        replaceSelectedButton.setDisable(recipe == null);
+
+        if (recipe == null) {
+            deckDetailsArea.setText("");
+            return;
+        }
+
+        try {
+            deckDetailsArea.setText(formatter.format(recipe));
+        } catch (SQLException e) {
+            showAlert(Alert.AlertType.ERROR, "Error", "Failed to load card names: " + e.getMessage());
+        }
+    }
+
+    private void onReplaceSelected() {
         DeckRecipe selectedRecipe = recipeListView.getSelectionModel().getSelectedItem();
         if (selectedRecipe == null) {
             showAlert(Alert.AlertType.WARNING, "No Selection", "Please select a recipe slot to replace.");
@@ -199,47 +203,27 @@ public class TagForceEditor extends Application {
         );
 
         File file = fileChooser.showOpenDialog(replaceSelectedButton.getScene().getWindow());
-        if (file != null) {
-            try {
-                YDKFile loadedYDK = YDKFile.parse(file);
+        if (file == null) {
+            return;
+        }
 
-                // Show loaded deck info
-                StringBuilder sb = new StringBuilder();
-                sb.append("═══════════════════════════════\n");
-                sb.append("  YDK LOADED\n");
-                sb.append("═══════════════════════════════\n\n");
-                sb.append("Deck Name: ").append(loadedYDK.getDeckName()).append("\n");
-                sb.append("Target Slot: ").append(selectedRecipe.getSlotIndex()).append("\n\n");
+        try {
+            YDKFile loadedYDK = YDKFile.parse(file);
+            deckDetailsArea.setText(formatter.format(loadedYDK, selectedRecipe.getSlotIndex()));
 
-                formatDeckComposition(sb, loadedYDK.getMainDeckCount(), loadedYDK.getExtraDeckCount(), loadedYDK.getSideDeckCount(), loadedYDK.getTotalCardCount());
+            showAlert(Alert.AlertType.INFORMATION, "YDK Loaded",
+                    String.format("Loaded '%s' (%d cards)\nReady to replace slot %d: %s",
+                            loadedYDK.getDeckName(),
+                            loadedYDK.getTotalCardCount(),
+                            selectedRecipe.getSlotIndex(),
+                            selectedRecipe.getName()));
 
-                sb.append("Main Deck Cards:\n");
-                sb.append(formatYdkIds(loadedYDK.getMainDeck())).append("\n");
-
-                if (!loadedYDK.getExtraDeck().isEmpty()) {
-                    sb.append("Extra Deck Cards:\n");
-                    sb.append(formatYdkIds(loadedYDK.getExtraDeck())).append("\n");
-                }
-
-                if (!loadedYDK.getSideDeck().isEmpty()) {
-                    sb.append("Side Deck Cards:\n");
-                    sb.append(formatYdkIds(loadedYDK.getSideDeck()));
-                }
-
-                deckDetailsArea.setText(sb.toString());
-
-                showAlert(Alert.AlertType.INFORMATION, "YDK Loaded",
-                        String.format("Loaded '%s' (%d cards)\nReady to replace slot %d: %s",
-                                loadedYDK.getDeckName(),
-                                loadedYDK.getTotalCardCount(),
-                                selectedRecipe.getSlotIndex(),
-                                selectedRecipe.getName()));
-
-            } catch (IOException e) {
-                showAlert(Alert.AlertType.ERROR, "Read Error", "Failed to read YDK file: " + e.getMessage());
-            } catch (YDKFile.YDKParseException e) {
-                showAlert(Alert.AlertType.ERROR, "Parse Error", "Invalid YDK file: " + e.getMessage());
-            }
+        } catch (IOException e) {
+            showAlert(Alert.AlertType.ERROR, "Read Error", "Failed to read YDK file: " + e.getMessage());
+        } catch (YDKFile.YDKParseException e) {
+            showAlert(Alert.AlertType.ERROR, "Parse Error", "Invalid YDK file: " + e.getMessage());
+        } catch (SQLException e) {
+            showAlert(Alert.AlertType.ERROR, "Error", "Failed to load card names: " + e.getMessage());
         }
     }
 
@@ -252,7 +236,6 @@ public class TagForceEditor extends Application {
                 new FileChooser.ExtensionFilter("YGO Recipe Files", "*.ygr", "*.YGR")
         );
 
-        // Start in last directory if available
         String lastPath = prefs.get(PREF_LAST_FILE, null);
         if (lastPath != null) {
             File lastFile = new File(lastPath);
@@ -295,22 +278,16 @@ public class TagForceEditor extends Application {
             filePathLabel.setTextFill(Color.web("#4ecca3"));
             loadButton.setDisable(false);
 
-            // Parse and display recipes
             List<DeckRecipe> recipes = parser.parseRecipes();
             recipeListView.getItems().clear();
             recipeListView.getItems().addAll(recipes);
 
             if (recipes.isEmpty()) {
-                deckDetailsArea.setText("No recipes found in file.\n\n" +
-                        "File: " + currentFile.getName() + "\n" +
-                        "Size: " + fileData.length + " bytes\n\n" +
-                        "Hex dump (first 256 bytes):\n" +
-                        parser.getHexDump(0, 256));
+                deckDetailsArea.setText(formatter.formatEmptyFile(
+                        currentFile.getName(), fileData.length, parser.getHexDump(0, 256)));
             } else {
-                deckDetailsArea.setText("Loaded " + recipes.size() + " recipe(s)\n\n" +
-                        "File: " + currentFile.getName() + "\n" +
-                        "Size: " + fileData.length + " bytes\n\n" +
-                        "Select a recipe to view details.");
+                deckDetailsArea.setText(formatter.formatFileLoaded(
+                        currentFile.getName(), fileData.length, recipes.size()));
             }
 
         } catch (IOException e) {
@@ -319,93 +296,6 @@ public class TagForceEditor extends Application {
             showAlert(Alert.AlertType.ERROR, "Parse Error", "Failed to parse file: " + e.getMessage());
             e.printStackTrace();
         }
-    }
-
-    private void showDeckDetails(DeckRecipe recipe) throws SQLException {
-        // Enable replace button only when a recipe is selected
-        replaceSelectedButton.setDisable(recipe == null);
-
-        if (recipe == null) {
-            deckDetailsArea.setText("");
-            return;
-        }
-
-        StringBuilder sb = new StringBuilder();
-        sb.append("═══════════════════════════════\n");
-        sb.append("  ").append(recipe.getName()).append("\n");
-        sb.append("═══════════════════════════════\n\n");
-
-        sb.append("Slot: ").append(recipe.getSlotIndex()).append("\n");
-        if (recipe.getLastModified() != null) {
-            sb.append("Modified: ").append(recipe.getLastModified()).append("\n");
-        }
-        sb.append("Data Offset: 0x").append(String.format("%04X", recipe.getDataOffset())).append("\n");
-        sb.append("Card Data: 0x").append(String.format("%04X", recipe.getCardDataOffset())).append("\n\n");
-
-        formatDeckComposition(sb, recipe.getMainDeckCount(), recipe.getExtraDeckCount(), recipe.getSideDeckCount(), recipe.getTotalCardCount());
-
-        if (!recipe.getMainDeckIds().isEmpty()) {
-            sb.append("Main Deck Cards:\n");
-            sb.append(formatTagForceIds(recipe.getMainDeckIds()));
-            sb.append("\n");
-        }
-
-        if (!recipe.getExtraDeckIds().isEmpty()) {
-            sb.append("Extra Deck Card IDs:\n");
-            sb.append(formatTagForceIds(recipe.getExtraDeckIds()));
-            sb.append("\n");
-        }
-
-        if (!recipe.getSideDeckIds().isEmpty()) {
-            sb.append("Side Deck Card IDs:\n");
-            sb.append(formatTagForceIds(recipe.getSideDeckIds()));
-        }
-
-        deckDetailsArea.setText(sb.toString());
-    }
-
-    private String formatTagForceIds(List<Integer> ids) throws SQLException {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < ids.size(); i++) {
-            String cardName = cardIDMapper.cardNameFromTagForceId(ids.get(i));
-            sb.append(cardName);
-            if ((i + 1) % 8 == 0) {
-                sb.append("\n");
-            } else if (i < ids.size() - 1) {
-                sb.append(", ");
-            }
-        }
-        if (ids.size() % 8 != 0) {
-            sb.append("\n");
-        }
-        return sb.toString();
-    }
-
-    private String formatYdkIds(List<Integer> ids) throws SQLException {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < ids.size(); i++) {
-            String cardName = cardIDMapper.cardNameFromYdkId(ids.get(i));
-            sb.append(cardName);
-            if ((i + 1) % 6 == 0) {
-                sb.append("\n");
-            } else if (i < ids.size() - 1) {
-                sb.append(", ");
-            }
-        }
-        if (ids.size() % 6 != 0) {
-            sb.append("\n");
-        }
-        return sb.toString();
-    }
-
-    private void formatDeckComposition(StringBuilder sb, int mainDeckCount, int extraDeckCount, int sideDeckCount, int totalCardCount) {
-        sb.append("┌─ Deck Composition ─────────┐\n");
-        sb.append("│  Main Deck:  ").append(String.format("%3d", mainDeckCount)).append(" cards     │\n");
-        sb.append("│  Extra Deck: ").append(String.format("%3d", extraDeckCount)).append(" cards     │\n");
-        sb.append("│  Side Deck:  ").append(String.format("%3d", sideDeckCount)).append(" cards     │\n");
-        sb.append("│  ─────────────────────     │\n");
-        sb.append("│  Total:      ").append(String.format("%3d", totalCardCount)).append(" cards     │\n");
-        sb.append("└────────────────────────────┘\n\n");
     }
 
     private void showAlert(Alert.AlertType type, String title, String content) {
@@ -420,7 +310,6 @@ public class TagForceEditor extends Application {
         launch(args);
     }
 
-    // Custom cell for recipe list
     private static class RecipeListCell extends ListCell<DeckRecipe> {
         @Override
         protected void updateItem(DeckRecipe item, boolean empty) {
