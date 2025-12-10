@@ -14,14 +14,14 @@ import java.util.List;
  *   +0x00 (4 bytes):  Unknown marker (always 01 00 00 00)
  *   +0x04 (64 bytes): Deck name (UTF-16LE, max 32 chars, null-terminated)
  *   +0x44 (52 bytes): Reserved/padding
- *   +0x78 (8 bytes):  DateTime: year(2), month(2), day(2), hour(2) as uint16 LE
- *   +0x82 (2 bytes):  Main + Extra count
+ *   +0x84 (8 bytes):  DateTime: year(2), month(2), day(2), hour(2) as uint16 LE
+ *   +0x8C (2 bytes):  Main + Extra count
  *   +0x94 (2 bytes):  Main deck card count
  *   +0x98 (2 bytes):  Extra deck card count
  *   +0x9C (2 bytes):  Side deck card count
  *   +0xA0 (var):      Main deck card IDs (2 bytes each, little endian)
- *   +0xA0 + main*2:   Side deck card IDs
- *   +0xA0 + (main+extra)*2: Extra deck card IDs
+ *   +0xA0 + main*2:   Extra deck card IDs
+ *   +0xA0 + (main+extra)*2: Side deck card IDs
  */
 public class SaveGameParser {
 
@@ -32,14 +32,20 @@ public class SaveGameParser {
     private static final int RECIPE_BLOCK_SIZE = 0x1B4;  // 436 bytes per recipe
 
     // Recipe entry offsets (relative to recipe start)
-    private static final int MARKER_OFFSET = 0x00;
     private static final int NAME_OFFSET = 0x04;
     private static final int NAME_MAX_CHARS = 32;
     private static final int DATETIME_OFFSET = 0x84;
+    private static final int MAIN_EXTRA_COUNT_OFFSET = 0x8C;
     private static final int MAIN_COUNT_OFFSET = 0x94;
     private static final int EXTRA_COUNT_OFFSET = 0x98;
     private static final int SIDE_COUNT_OFFSET = 0x9C;
-    private static final int MAIN_CARD_IDS_OFFSET = 0xA0;
+    private static final int CARD_IDS_OFFSET = 0xA0;
+
+    // Maximum cards in the card data region
+    private static final int MAX_MAIN_CARDS = 60;
+    private static final int MAX_SIDE_CARDS = 15;
+    private static final int MAX_EXTRA_CARDS = 15;
+    private static final int MAX_TOTAL_CARDS = MAX_MAIN_CARDS + MAX_SIDE_CARDS + MAX_EXTRA_CARDS;
 
     public SaveGameParser(byte[] data) {
         this.data = data;
@@ -66,8 +72,7 @@ public class SaveGameParser {
         int maxRecipes = 20;
         int recipeIndex = 0;
 
-        while (recipeOffset + MAIN_CARD_IDS_OFFSET < data.length && recipes.size() < maxRecipes) {
-            // Check if we've hit empty padding (stop reading)
+        while (recipeOffset + CARD_IDS_OFFSET < data.length && recipes.size() < maxRecipes) {
             if (isEmptyBlock(recipeOffset)) {
                 break;
             }
@@ -86,10 +91,112 @@ public class SaveGameParser {
     }
 
     /**
+     * Write deck card data to a recipe slot.
+     *
+     * @param recipeOffset the byte offset of the recipe in the file
+     * @param mainDeck     list of main deck card IDs (40-60 cards)
+     * @param sideDeck     list of side deck card IDs (0-15 cards)
+     * @param extraDeck    list of extra deck card IDs (0-15 cards)
+     * @throws IllegalArgumentException if deck sizes are invalid
+     */
+    public void writeDeck(int recipeOffset, List<Integer> mainDeck, List<Integer> sideDeck, List<Integer> extraDeck) {
+        validateDeckSizes(mainDeck, sideDeck, extraDeck);
+
+        // Update count fields
+        writeUInt16(recipeOffset + MAIN_COUNT_OFFSET, mainDeck.size());
+        writeUInt16(recipeOffset + EXTRA_COUNT_OFFSET, extraDeck.size());
+        writeUInt16(recipeOffset + SIDE_COUNT_OFFSET, sideDeck.size());
+        writeUInt16(recipeOffset + MAIN_EXTRA_COUNT_OFFSET, mainDeck.size() + extraDeck.size());
+
+        // Zero out the entire card ID region first
+        int cardRegionStart = recipeOffset + CARD_IDS_OFFSET;
+        int cardRegionSize = MAX_TOTAL_CARDS * 2;
+        zeroRegion(cardRegionStart, cardRegionSize);
+
+        // Write card IDs: Main, then Extra, then Side
+        int offset = cardRegionStart;
+        offset = writeCardIds(offset, mainDeck);
+        offset = writeCardIds(offset, extraDeck);
+        writeCardIds(offset, sideDeck);
+    }
+
+    /**
+     * Write deck card data and update the deck name.
+     *
+     * @param recipeOffset the byte offset of the recipe in the file
+     * @param deckName     the new deck name (max 32 characters)
+     * @param mainDeck     list of main deck card IDs (40-60 cards)
+     * @param sideDeck     list of side deck card IDs (0-15 cards)
+     * @param extraDeck    list of extra deck card IDs (0-15 cards)
+     * @throws IllegalArgumentException if deck sizes are invalid
+     */
+    public void writeDeck(int recipeOffset, String deckName, List<Integer> mainDeck, List<Integer> sideDeck, List<Integer> extraDeck) {
+        writeDeckName(recipeOffset, deckName);
+        writeDeck(recipeOffset, mainDeck, sideDeck, extraDeck);
+    }
+
+    /**
+     * Write a deck name to a recipe slot.
+     *
+     * @param recipeOffset the byte offset of the recipe in the file
+     * @param name         the deck name (max 32 characters, will be truncated if longer)
+     */
+    public void writeDeckName(int recipeOffset, String name) {
+        int nameOffset = recipeOffset + NAME_OFFSET;
+        int maxBytes = NAME_MAX_CHARS * 2;
+
+        // Zero out the name region first
+        zeroRegion(nameOffset, maxBytes);
+
+        // Truncate name if necessary
+        String truncatedName = name.length() > NAME_MAX_CHARS ? name.substring(0, NAME_MAX_CHARS) : name;
+
+        // Write as UTF-16LE
+        for (int i = 0; i < truncatedName.length(); i++) {
+            char c = truncatedName.charAt(i);
+            int charOffset = nameOffset + i * 2;
+            data[charOffset] = (byte) (c & 0xFF);
+            data[charOffset + 1] = (byte) ((c >> 8) & 0xFF);
+        }
+    }
+
+    private void validateDeckSizes(List<Integer> mainDeck, List<Integer> sideDeck, List<Integer> extraDeck) {
+        if (mainDeck.size() < 40 || mainDeck.size() > MAX_MAIN_CARDS) {
+            throw new IllegalArgumentException("Main deck must contain 40-60 cards, got: " + mainDeck.size());
+        }
+        if (sideDeck.size() > MAX_SIDE_CARDS) {
+            throw new IllegalArgumentException("Side deck cannot exceed 15 cards, got: " + sideDeck.size());
+        }
+        if (extraDeck.size() > MAX_EXTRA_CARDS) {
+            throw new IllegalArgumentException("Extra deck cannot exceed 15 cards, got: " + extraDeck.size());
+        }
+    }
+
+    private void zeroRegion(int offset, int length) {
+        for (int i = 0; i < length && offset + i < data.length; i++) {
+            data[offset + i] = 0;
+        }
+    }
+
+    private int writeCardIds(int offset, List<Integer> cardIds) {
+        for (int cardId : cardIds) {
+            writeUInt16(offset, cardId);
+            offset += 2;
+        }
+        return offset;
+    }
+
+    private void writeUInt16(int offset, int value) {
+        if (offset + 1 < data.length) {
+            data[offset] = (byte) (value & 0xFF);
+            data[offset + 1] = (byte) ((value >> 8) & 0xFF);
+        }
+    }
+
+    /**
      * Check if a block is empty (all zeros in name area).
      */
     private boolean isEmptyBlock(int offset) {
-        // Check the first few bytes of name area
         for (int i = 0; i < 8 && offset + NAME_OFFSET + i < data.length; i++) {
             if (data[offset + NAME_OFFSET + i] != 0) {
                 return false;
@@ -102,48 +209,43 @@ public class SaveGameParser {
      * Parse a single recipe entry at the given file offset.
      */
     private DeckRecipe parseRecipeAt(int offset, int index) {
-        if (offset + MAIN_CARD_IDS_OFFSET >= data.length) {
+        if (offset + CARD_IDS_OFFSET >= data.length) {
             return null;
         }
 
-        // Read name
         String name = readUTF16LEString(offset + NAME_OFFSET, NAME_MAX_CHARS);
         if (name == null || name.isEmpty()) {
             return null;
         }
 
-        // Read datetime
         int year = readUInt16(offset + DATETIME_OFFSET);
         int month = readUInt16(offset + DATETIME_OFFSET + 2);
         int day = readUInt16(offset + DATETIME_OFFSET + 4);
         int hour = readUInt16(offset + DATETIME_OFFSET + 6);
 
-        // Read deck counts from their respective offsets
         int mainCount = readUInt16(offset + MAIN_COUNT_OFFSET);
         int extraCount = readUInt16(offset + EXTRA_COUNT_OFFSET);
         int sideCount = readUInt16(offset + SIDE_COUNT_OFFSET);
 
-        // Validate counts
-        if (mainCount > 60 || mainCount < 0) {
+        if (mainCount > MAX_MAIN_CARDS || mainCount < 0) {
             return null;
         }
-        if (extraCount > 15 || extraCount < 0) {
+        if (extraCount > MAX_EXTRA_CARDS || extraCount < 0) {
             return null;
         }
-        if (sideCount > 15 || sideCount < 0) {
+        if (sideCount > MAX_SIDE_CARDS || sideCount < 0) {
             return null;
         }
 
-        // Read card IDs - Main, then Extra, then Side
-        int cardOffset = offset + MAIN_CARD_IDS_OFFSET;
+        int cardOffset = offset + CARD_IDS_OFFSET;
 
         List<Integer> mainDeckIds = readCardIds(cardOffset, mainCount);
         cardOffset += mainCount * 2;
 
-        List<Integer> sideDeckIds = readCardIds(cardOffset, sideCount);
+        List<Integer> extraDeckIds = readCardIds(cardOffset, extraCount);
         cardOffset += extraCount * 2;
 
-        List<Integer> extraDeckIds = readCardIds(cardOffset, extraCount);
+        List<Integer> sideDeckIds = readCardIds(cardOffset, sideCount);
 
         DeckRecipe recipe = new DeckRecipe(
                 index,
@@ -157,7 +259,7 @@ public class SaveGameParser {
         );
 
         recipe.setDataOffset(offset);
-        recipe.setCardDataOffset(offset + MAIN_CARD_IDS_OFFSET);
+        recipe.setCardDataOffset(offset + CARD_IDS_OFFSET);
 
         if (year > 2000 && year < 2100) {
             recipe.setLastModified(String.format("%d-%02d-%02d %02d:00", year, month, day, hour));
@@ -166,9 +268,6 @@ public class SaveGameParser {
         return recipe;
     }
 
-    /**
-     * Read a list of card IDs from the given offset.
-     */
     private List<Integer> readCardIds(int offset, int count) {
         List<Integer> ids = new ArrayList<>();
 
@@ -183,9 +282,6 @@ public class SaveGameParser {
         return ids;
     }
 
-    /**
-     * Read a UTF-16LE encoded string.
-     */
     private String readUTF16LEString(int offset, int maxChars) {
         if (offset + maxChars * 2 > data.length) {
             return null;
@@ -205,23 +301,9 @@ public class SaveGameParser {
         return sb.toString();
     }
 
-    /**
-     * Read a 16-bit unsigned integer (little endian).
-     */
     private int readUInt16(int offset) {
         if (offset + 1 >= data.length) return 0;
         return (data[offset] & 0xFF) | ((data[offset + 1] & 0xFF) << 8);
-    }
-
-    /**
-     * Read a 32-bit signed integer (little endian).
-     */
-    private int readInt32(int offset) {
-        if (offset + 3 >= data.length) return -1;
-        return (data[offset] & 0xFF) |
-                ((data[offset + 1] & 0xFF) << 8) |
-                ((data[offset + 2] & 0xFF) << 16) |
-                ((data[offset + 3] & 0xFF) << 24);
     }
 
     /**
@@ -249,7 +331,6 @@ public class SaveGameParser {
             ascii.append(c >= 32 && c < 127 ? c : '.');
         }
 
-        // Pad final line
         if (!ascii.isEmpty()) {
             int remaining = 16 - ascii.length();
             sb.append("   ".repeat(Math.max(0, remaining)));
@@ -257,6 +338,13 @@ public class SaveGameParser {
         }
 
         return sb.toString();
+    }
+
+    /**
+     * Get the file header size.
+     */
+    public static int getFileHeaderSize() {
+        return FILE_HEADER_SIZE;
     }
 
     /**

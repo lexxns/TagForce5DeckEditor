@@ -19,7 +19,6 @@ public class CardIDMapper {
     private static final String ydkId = "ydk_id";
     private final SQLiteWrapper wrapper;
 
-
     public CardIDMapper() throws SQLException, ClassNotFoundException {
         wrapper = new SQLiteWrapper(database);
         wrapper.open();
@@ -30,7 +29,10 @@ public class CardIDMapper {
         query.field(cardName)
                 .where(String.format("%s = %s", tagForceId, cardId));
         try (ResultSet results = wrapper.select(query)) {
-            return results.getString(cardName);
+            if (results.next()) {
+                return results.getString(cardName);
+            }
+            return "Unknown (TF:" + cardId + ")";
         }
     }
 
@@ -39,29 +41,58 @@ public class CardIDMapper {
         query.field(cardName)
                 .where(String.format("%s = %s", ydkId, cardId));
         try (ResultSet results = wrapper.select(query)) {
-            return results.getString(cardName);
+            if (results.next()) {
+                return results.getString(cardName);
+            }
+            return "Unknown (YDK:" + cardId + ")";
+        }
+    }
+
+    /**
+     * Converts a YDK card ID to a Tag Force card ID.
+     *
+     * @param cardId the YDK card ID
+     * @return the Tag Force card ID
+     * @throws CardNotFoundException if the card is not found in the database
+     */
+    public Integer tagForceIdFromYdkId(Integer cardId) throws SQLException, CardNotFoundException {
+        SelectQuery query = new SelectQuery(table);
+        query.field(tagForceId)
+                .where(String.format("%s = %s", ydkId, cardId));
+        try (ResultSet results = wrapper.select(query)) {
+            if (results.next()) {
+                int tfId = results.getInt(tagForceId);
+                if (results.wasNull()) {
+                    throw new CardNotFoundException("Card found but has no Tag Force ID: YDK " + cardId);
+                }
+                return tfId;
+            }
+            throw new CardNotFoundException("Card not found in database: YDK " + cardId);
         }
     }
 
     private static String getDatabasePath() {
         try {
-            // Get the resource as a stream
             InputStream inputStream = CardIDMapper.class.getResourceAsStream("tag_force_5.db");
             if (inputStream == null) {
                 throw new RuntimeException("Database resource not found");
             }
 
-            // Create a temp file that deletes on JVM exit
             File tempFile = File.createTempFile("tag_force_5", ".db");
             tempFile.deleteOnExit();
 
-            // Copy the resource to the temp file
             Files.copy(inputStream, tempFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
             inputStream.close();
 
             return tempFile.getAbsolutePath();
         } catch (IOException e) {
             throw new RuntimeException("Failed to extract database", e);
+        }
+    }
+
+    public static class CardNotFoundException extends Exception {
+        public CardNotFoundException(String message) {
+            super(message);
         }
     }
 }

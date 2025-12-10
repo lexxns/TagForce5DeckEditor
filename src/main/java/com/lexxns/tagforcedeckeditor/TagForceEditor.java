@@ -16,6 +16,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.prefs.Preferences;
 
@@ -33,6 +34,7 @@ public class TagForceEditor extends Application {
     private Button replaceSelectedButton;
 
     private CardIDMapper cardIDMapper;
+    private SaveGameParser parser;
     private DeckDetailsFormatter formatter;
 
     @Override
@@ -209,22 +211,75 @@ public class TagForceEditor extends Application {
 
         try {
             YDKFile loadedYDK = YDKFile.parse(file);
-            deckDetailsArea.setText(formatter.format(loadedYDK, selectedRecipe.getSlotIndex()));
 
-            showAlert(Alert.AlertType.INFORMATION, "YDK Loaded",
-                    String.format("Loaded '%s' (%d cards)\nReady to replace slot %d: %s",
-                            loadedYDK.getDeckName(),
-                            loadedYDK.getTotalCardCount(),
+            // Convert YDK IDs to Tag Force IDs
+            List<Integer> mainDeck = convertToTagForceIds(loadedYDK.getMainDeck(), "Main Deck");
+            List<Integer> sideDeck = convertToTagForceIds(loadedYDK.getSideDeck(), "Side Deck");
+            List<Integer> extraDeck = convertToTagForceIds(loadedYDK.getExtraDeck(), "Extra Deck");
+
+            // Write to the parser's data buffer using the recipe's byte offset
+            parser.writeDeck(
+                    selectedRecipe.getDataOffset(),
+                    loadedYDK.getDeckName(),
+                    mainDeck,
+                    sideDeck,
+                    extraDeck
+            );
+
+            // Write the modified data back to the file
+            saveCurrentFile();
+
+            // Reload to refresh the UI
+            loadCurrentFile();
+
+            // Re-select the same slot
+            recipeListView.getSelectionModel().select(selectedRecipe.getSlotIndex());
+
+            showAlert(Alert.AlertType.INFORMATION, "Deck Replaced",
+                    String.format("Successfully replaced slot %d with '%s' (%d cards)",
                             selectedRecipe.getSlotIndex(),
-                            selectedRecipe.getName()));
+                            loadedYDK.getDeckName(),
+                            loadedYDK.getTotalCardCount()));
 
         } catch (IOException e) {
             showAlert(Alert.AlertType.ERROR, "Read Error", "Failed to read YDK file: " + e.getMessage());
         } catch (YDKFile.YDKParseException e) {
             showAlert(Alert.AlertType.ERROR, "Parse Error", "Invalid YDK file: " + e.getMessage());
+        } catch (CardIDMapper.CardNotFoundException e) {
+            showAlert(Alert.AlertType.ERROR, "Card Not Found", e.getMessage());
         } catch (SQLException e) {
-            showAlert(Alert.AlertType.ERROR, "Error", "Failed to load card names: " + e.getMessage());
+            showAlert(Alert.AlertType.ERROR, "Error", "Failed to convert card IDs: " + e.getMessage());
+        } catch (IllegalArgumentException e) {
+            showAlert(Alert.AlertType.ERROR, "Invalid Deck", e.getMessage());
         }
+    }
+
+    private List<Integer> convertToTagForceIds(List<Integer> ydkIds, String deckType) throws SQLException, CardIDMapper.CardNotFoundException {
+        List<String> notFoundCards = new ArrayList<>();
+        List<Integer> result = new ArrayList<>();
+
+        for (Integer ydkId : ydkIds) {
+            try {
+                result.add(cardIDMapper.tagForceIdFromYdkId(ydkId));
+            } catch (CardIDMapper.CardNotFoundException e) {
+                notFoundCards.add(ydkId.toString());
+            }
+        }
+
+        if (!notFoundCards.isEmpty()) {
+            throw new CardIDMapper.CardNotFoundException(
+                    String.format("%d card(s) in %s not found in Tag Force 5 database: %s",
+                            notFoundCards.size(), deckType, String.join(", ", notFoundCards)));
+        }
+
+        return result;
+    }
+
+    private void saveCurrentFile() throws IOException {
+        if (currentFile == null) {
+            throw new IOException("No file loaded");
+        }
+        Files.write(currentFile.toPath(), parser.getData());
     }
 
     private void browseForFile(Stage stage) {
@@ -272,7 +327,7 @@ public class TagForceEditor extends Application {
 
         try {
             byte[] fileData = Files.readAllBytes(currentFile.toPath());
-            SaveGameParser parser = new SaveGameParser(fileData);
+            parser = new SaveGameParser(fileData);
 
             filePathLabel.setText(currentFile.getAbsolutePath());
             filePathLabel.setTextFill(Color.web("#4ecca3"));
