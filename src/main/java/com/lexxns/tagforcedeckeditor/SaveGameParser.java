@@ -5,20 +5,23 @@ import java.util.List;
 
 /**
  * Parser for Yu-Gi-Oh save game files (deck recipe save data).
- *
+ * <p>
  * File structure:
  * - Header (0x00-0x1F): File metadata
  * - Recipe slots start at 0x20, each 0x1B4 (436) bytes
- *
+ * <p>
  * Recipe entry structure (offsets relative to recipe start):
- *   +0x00 (4 bytes):  Unknown marker (always 01 00 00 00?)
+ *   +0x00 (4 bytes):  Unknown marker (always 01 00 00 00)
  *   +0x04 (64 bytes): Deck name (UTF-16LE, max 32 chars, null-terminated)
  *   +0x44 (52 bytes): Reserved/padding
  *   +0x78 (8 bytes):  DateTime: year(2), month(2), day(2), hour(2) as uint16 LE
- *   +0x80 (2 bytes):  Main deck card count
- *   +0x82 (2 bytes):  Total card count (main + extra)
- *   +0x84 (16 bytes): Metadata
- *   +0x94 (var):      Card IDs (2 bytes each, little endian)
+ *   +0x82 (2 bytes):  Main + Extra count
+ *   +0x94 (2 bytes):  Main deck card count
+ *   +0x98 (2 bytes):  Extra deck card count
+ *   +0x9C (2 bytes):  Side deck card count
+ *   +0xA0 (var):      Main deck card IDs (2 bytes each, little endian)
+ *   +0xA0 + main*2:   Side deck card IDs
+ *   +0xA0 + (main+extra)*2: Extra deck card IDs
  */
 public class SaveGameParser {
 
@@ -32,10 +35,11 @@ public class SaveGameParser {
     private static final int MARKER_OFFSET = 0x00;
     private static final int NAME_OFFSET = 0x04;
     private static final int NAME_MAX_CHARS = 32;
-    private static final int DECK_HEADER_OFFSET = 0x84;
+    private static final int DATETIME_OFFSET = 0x84;
     private static final int MAIN_COUNT_OFFSET = 0x94;
-    private static final int TOTAL_COUNT_OFFSET = 0x82;
-    private static final int CARD_IDS_OFFSET = 0xA0;
+    private static final int EXTRA_COUNT_OFFSET = 0x98;
+    private static final int SIDE_COUNT_OFFSET = 0x9C;
+    private static final int MAIN_CARD_IDS_OFFSET = 0xA0;
 
     public SaveGameParser(byte[] data) {
         this.data = data;
@@ -62,7 +66,7 @@ public class SaveGameParser {
         int maxRecipes = 20;
         int recipeIndex = 0;
 
-        while (recipeOffset + CARD_IDS_OFFSET < data.length && recipes.size() < maxRecipes) {
+        while (recipeOffset + MAIN_CARD_IDS_OFFSET < data.length && recipes.size() < maxRecipes) {
             // Check if we've hit empty padding (stop reading)
             if (isEmptyBlock(recipeOffset)) {
                 break;
@@ -98,7 +102,7 @@ public class SaveGameParser {
      * Parse a single recipe entry at the given file offset.
      */
     private DeckRecipe parseRecipeAt(int offset, int index) {
-        if (offset + CARD_IDS_OFFSET >= data.length) {
+        if (offset + MAIN_CARD_IDS_OFFSET >= data.length) {
             return null;
         }
 
@@ -109,44 +113,51 @@ public class SaveGameParser {
         }
 
         // Read datetime
-        int year = readUInt16(offset + DECK_HEADER_OFFSET);
-        int month = readUInt16(offset + DECK_HEADER_OFFSET + 2);
-        int day = readUInt16(offset + DECK_HEADER_OFFSET + 4);
-        int hour = readUInt16(offset + DECK_HEADER_OFFSET + 6);
+        int year = readUInt16(offset + DATETIME_OFFSET);
+        int month = readUInt16(offset + DATETIME_OFFSET + 2);
+        int day = readUInt16(offset + DATETIME_OFFSET + 4);
+        int hour = readUInt16(offset + DATETIME_OFFSET + 6);
 
-        // Read deck counts
+        // Read deck counts from their respective offsets
         int mainCount = readUInt16(offset + MAIN_COUNT_OFFSET);
-        int totalCount = readUInt16(offset + TOTAL_COUNT_OFFSET);
+        int extraCount = readUInt16(offset + EXTRA_COUNT_OFFSET);
+        int sideCount = readUInt16(offset + SIDE_COUNT_OFFSET);
 
         // Validate counts
-        if (mainCount > 60 || mainCount < 0 || totalCount > 90) {
+        if (mainCount > 60 || mainCount < 0) {
+            return null;
+        }
+        if (extraCount > 15 || extraCount < 0) {
+            return null;
+        }
+        if (sideCount > 15 || sideCount < 0) {
             return null;
         }
 
-        // Calculate extra deck count
-        int extraCount = Math.max(0, totalCount - mainCount);
+        // Read card IDs - Main, then Extra, then Side
+        int cardOffset = offset + MAIN_CARD_IDS_OFFSET;
 
-        // Read card IDs
-        int cardOffset = offset + CARD_IDS_OFFSET;
         List<Integer> mainDeckIds = readCardIds(cardOffset, mainCount);
         cardOffset += mainCount * 2;
 
+        List<Integer> sideDeckIds = readCardIds(cardOffset, sideCount);
+        cardOffset += extraCount * 2;
+
         List<Integer> extraDeckIds = readCardIds(cardOffset, extraCount);
 
-        // Use the index as our display slot (0-based)
         DeckRecipe recipe = new DeckRecipe(
                 index,
                 name,
                 mainCount,
-                extraDeckIds.size(),
-                0,
+                extraCount,
+                sideCount,
                 mainDeckIds,
                 extraDeckIds,
-                new ArrayList<>()
+                sideDeckIds
         );
 
         recipe.setDataOffset(offset);
-        recipe.setCardDataOffset(offset + CARD_IDS_OFFSET);
+        recipe.setCardDataOffset(offset + MAIN_CARD_IDS_OFFSET);
 
         if (year > 2000 && year < 2100) {
             recipe.setLastModified(String.format("%d-%02d-%02d %02d:00", year, month, day, hour));
@@ -239,11 +250,9 @@ public class SaveGameParser {
         }
 
         // Pad final line
-        if (ascii.length() > 0) {
+        if (!ascii.isEmpty()) {
             int remaining = 16 - ascii.length();
-            for (int i = 0; i < remaining; i++) {
-                sb.append("   ");
-            }
+            sb.append("   ".repeat(Math.max(0, remaining)));
             sb.append(" | ").append(ascii).append("\n");
         }
 
