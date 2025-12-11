@@ -32,6 +32,7 @@ public class TagForceEditor extends Application {
     private TextArea deckDetailsArea;
     private Button loadButton;
     private Button replaceSelectedButton;
+    private Button addNewDeckButton;
 
     private CardIDMapper cardIDMapper;
     private SaveGameParser parser;
@@ -111,7 +112,11 @@ public class TagForceEditor extends Application {
             showAlert(Alert.AlertType.INFORMATION, "Preference Cleared", "Saved file path has been cleared.");
         });
 
-        fileBox.getChildren().addAll(filePathLabel, browseButton, loadButton, clearPrefButton);
+        addNewDeckButton = createStyledButton("Add New Deck", "#4ecca3", "#1a1a2e");
+        addNewDeckButton.setDisable(true);
+        addNewDeckButton.setOnAction(_ -> onAddNewDeck());
+
+        fileBox.getChildren().addAll(filePathLabel, browseButton, loadButton, addNewDeckButton, clearPrefButton);
         topBox.getChildren().addAll(titleLabel, fileBox);
         return topBox;
     }
@@ -254,6 +259,82 @@ public class TagForceEditor extends Application {
         }
     }
 
+    private void onAddNewDeck() {
+        if (parser == null) {
+            showAlert(Alert.AlertType.WARNING, "No File", "Please load a save file first.");
+            return;
+        }
+
+        int currentDeckCount = recipeListView.getItems().size();
+        if (currentDeckCount >= 20) {
+            showAlert(Alert.AlertType.WARNING, "Limit Reached", "Maximum of 20 deck slots reached.");
+            return;
+        }
+
+        FileChooser fileChooser = new FileChooser();
+        fileChooser.setTitle("Open YDK Deck File to Add");
+        fileChooser.getExtensionFilters().addAll(
+                new FileChooser.ExtensionFilter("YDK Deck Files", "*.ydk", "*.YDK"),
+                new FileChooser.ExtensionFilter("All Files", "*.*")
+        );
+
+        File file = fileChooser.showOpenDialog(addNewDeckButton.getScene().getWindow());
+        if (file == null) {
+            return;
+        }
+
+        try {
+            YDKFile loadedYDK = YDKFile.parse(file);
+
+            // Convert YDK IDs to Tag Force IDs
+            List<Integer> mainDeck = convertToTagForceIds(loadedYDK.getMainDeck(), "Main Deck");
+            List<Integer> sideDeck = convertToTagForceIds(loadedYDK.getSideDeck(), "Side Deck");
+            List<Integer> extraDeck = convertToTagForceIds(loadedYDK.getExtraDeck(), "Extra Deck");
+
+            // Calculate offset for the new slot
+            int newSlotIndex = currentDeckCount;
+            int newSlotOffset = SaveGameParser.getFileHeaderSize() + (newSlotIndex * SaveGameParser.getRecipeBlockSize());
+
+            // Initialize the new slot marker (01 00 00 00)
+            parser.initializeNewSlot(newSlotOffset);
+
+            // Write the deck data
+            parser.writeDeck(
+                    newSlotOffset,
+                    loadedYDK.getDeckName(),
+                    mainDeck,
+                    sideDeck,
+                    extraDeck
+            );
+
+            // Write the modified data back to the file
+            saveCurrentFile();
+
+            // Reload to refresh the UI
+            loadCurrentFile();
+
+            // Select the new slot
+            recipeListView.getSelectionModel().select(newSlotIndex);
+
+            showAlert(Alert.AlertType.INFORMATION, "Deck Added",
+                    String.format("Successfully added '%s' to slot %d (%d cards)",
+                            loadedYDK.getDeckName(),
+                            newSlotIndex,
+                            loadedYDK.getTotalCardCount()));
+
+        } catch (IOException e) {
+            showAlert(Alert.AlertType.ERROR, "Read Error", "Failed to read YDK file: " + e.getMessage());
+        } catch (YDKFile.YDKParseException e) {
+            showAlert(Alert.AlertType.ERROR, "Parse Error", "Invalid YDK file: " + e.getMessage());
+        } catch (CardIDMapper.CardNotFoundException e) {
+            showAlert(Alert.AlertType.ERROR, "Card Not Found", e.getMessage());
+        } catch (SQLException e) {
+            showAlert(Alert.AlertType.ERROR, "Error", "Failed to convert card IDs: " + e.getMessage());
+        } catch (IllegalArgumentException e) {
+            showAlert(Alert.AlertType.ERROR, "Invalid Deck", e.getMessage());
+        }
+    }
+
     private List<Integer> convertToTagForceIds(List<Integer> ydkIds, String deckType) throws SQLException, CardIDMapper.CardNotFoundException {
         List<String> notFoundCards = new ArrayList<>();
         List<Integer> result = new ArrayList<>();
@@ -332,6 +413,7 @@ public class TagForceEditor extends Application {
             filePathLabel.setText(currentFile.getAbsolutePath());
             filePathLabel.setTextFill(Color.web("#4ecca3"));
             loadButton.setDisable(false);
+            addNewDeckButton.setDisable(false);
 
             List<DeckRecipe> recipes = parser.parseRecipes();
             recipeListView.getItems().clear();

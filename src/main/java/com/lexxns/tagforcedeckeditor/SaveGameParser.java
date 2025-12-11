@@ -353,4 +353,23 @@ public class SaveGameParser {
     public static int getRecipeBlockSize() {
         return RECIPE_BLOCK_SIZE;
     }
+
+    /**
+     * Initialize a new recipe slot with the required marker bytes.
+     * Sets the marker to 01 00 00 00 and zeros the rest of the slot.
+     *
+     * @param recipeOffset the byte offset of the new recipe slot
+     */
+    public void initializeNewSlot(int recipeOffset) {
+        // Zero out the entire slot first
+        zeroRegion(recipeOffset, RECIPE_BLOCK_SIZE);
+
+        // Write the marker (01 00 00 00)
+        if (recipeOffset + 3 < data.length) {
+            data[recipeOffset] = 0x01;
+            data[recipeOffset + 1] = 0x00;
+            data[recipeOffset + 2] = 0x00;
+            data[recipeOffset + 3] = 0x00;
+        }
+    }
 }
