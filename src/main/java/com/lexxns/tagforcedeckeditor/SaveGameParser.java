@@ -114,9 +114,11 @@ public class SaveGameParser {
 
         // Write CONTIGUOUSLY: Main → Extra → Side
         int offset = cardRegionStart;
-        offset = writeCardIds(offset, mainDeck);    // Main deck
-        offset = writeCardIds(offset, extraDeck);   // Extra deck immediately after
-        writeCardIds(offset, sideDeck);             // Side deck immediately after extra
+        writeCardIds(offset, mainDeck);    // Main deck
+        offset += 120;
+        writeCardIds(offset, sideDeck);     // Side deck
+        offset += 30;
+        writeCardIds(offset, extraDeck);   // Extra deck
     }
 
     /**
@@ -177,12 +179,11 @@ public class SaveGameParser {
         }
     }
 
-    private int writeCardIds(int offset, List<Integer> cardIds) {
+    private void writeCardIds(int offset, List<Integer> cardIds) {
         for (int cardId : cardIds) {
             writeUInt16(offset, cardId);
             offset += 2;
         }
-        return offset;
     }
 
     private void writeUInt16(int offset, int value) {
@@ -239,12 +240,12 @@ public class SaveGameParser {
         int cardOffset = offset + CARD_IDS_OFFSET;
 
         List<Integer> mainDeckIds = readCardIds(cardOffset, mainCount);
-        cardOffset += mainCount * 2;
-
-        List<Integer> extraDeckIds = readCardIds(cardOffset, extraCount);
-        cardOffset += extraCount * 2;
+        cardOffset += 120;
 
         List<Integer> sideDeckIds = readCardIds(cardOffset, sideCount);
+        cardOffset += 30;
+
+        List<Integer> extraDeckIds = readCardIds(cardOffset, extraCount);
 
         DeckRecipe recipe = new DeckRecipe(
                 index,
