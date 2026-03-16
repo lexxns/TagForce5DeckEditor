@@ -206,7 +206,7 @@ public class TagForceEditor extends Application {
         fileChooser.setTitle("Open YDK Deck File");
         fileChooser.getExtensionFilters().addAll(
                 new FileChooser.ExtensionFilter("YDK Deck Files", "*.ydk", "*.YDK"),
-                new FileChooser.ExtensionFilter("All Files", "*.*")
+                new FileChooser.ExtensionFilter("All Files", "*")
         );
 
         File file = fileChooser.showOpenDialog(replaceSelectedButton.getScene().getWindow());
@@ -275,7 +275,7 @@ public class TagForceEditor extends Application {
         fileChooser.setTitle("Open YDK Deck File to Add");
         fileChooser.getExtensionFilters().addAll(
                 new FileChooser.ExtensionFilter("YDK Deck Files", "*.ydk", "*.YDK"),
-                new FileChooser.ExtensionFilter("All Files", "*.*")
+                new FileChooser.ExtensionFilter("All Files", "*")
         );
 
         File file = fileChooser.showOpenDialog(addNewDeckButton.getScene().getWindow());
@@ -367,9 +367,7 @@ public class TagForceEditor extends Application {
         FileChooser fileChooser = new FileChooser();
         fileChooser.setTitle("Open Save Game File");
         fileChooser.getExtensionFilters().addAll(
-                new FileChooser.ExtensionFilter("All Files", "*.*"),
-                new FileChooser.ExtensionFilter("Save Files", "*.sav", "*.dat"),
-                new FileChooser.ExtensionFilter("YGO Recipe Files", "*.ygr", "*.YGR")
+                new FileChooser.ExtensionFilter("All Files", "DATA*")
         );
 
         String lastPath = prefs.get(PREF_LAST_FILE, null);
