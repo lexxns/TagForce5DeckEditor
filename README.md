@@ -127,17 +127,18 @@ Inside a recipe (offsets relative to the start of the recipe):
 | `0x84`  | 8    | Date/time (`uint16` year, month, day, hour)           |
 | `0x8C`  | 2    | Main + Extra card count                               |
 | `0x94`  | 2    | Main Deck card count                                  |
-| `0x98`  | 2    | Extra Deck card count                                 |
-| `0x9C`  | 2    | Side Deck card count                                  |
+| `0x98`  | 2    | Side Deck card count                                  |
+| `0x9C`  | 2    | Extra Deck card count                                 |
 | `0xA0`  | 120  | Main Deck card IDs (60 slots, `uint16` little-endian) |
-| `0x118` | 30   | Extra Deck card IDs (15 slots)                        |
-| `0x136` | 30   | Side Deck card IDs (15 slots)                         |
+| `0x118` | 30   | Side Deck card IDs (15 slots)                         |
+| `0x136` | 30   | Extra Deck card IDs (15 slots)                        |
 
 The three card blocks are **fixed size** — the game reserves room for a full deck
-even when the Extra/Side deck is shorter — and the order is **Main → Extra → Side**.
-Getting that order wrong (or packing the cards without the reserved space) makes
-the game read Extra Deck monsters as Side Deck cards, where they show up blank and
-unusable.
+even when the Side/Extra deck is shorter — and the order is **Main → Side → Extra**
+for both the counts and the card blocks. If a count is written into the wrong
+field (for example the Extra count where the game expects the Side count), a Side
+Deck with fewer than 15 cards makes the game read Extra Deck monsters as Side Deck
+cards, where they appear blank and unusable.
 
 ## Project layout
 
@@ -157,8 +158,9 @@ src/test/java/                                                     Unit tests
 ## Troubleshooting
 
 - **Cards appear blank or in the wrong deck in-game.** Older builds wrote the
-  Extra and Side Deck blocks in the wrong order. Re-import the affected decks
-  with the current version (this is also covered by `SaveGameParserTest`).
+  Side and Extra Deck **counts** the wrong way round, so a short Side Deck made
+  the game read Extra Deck monsters as Side Deck cards. Re-import the affected
+  decks with the current version (this is covered by `SaveGameParserTest`).
 - **"Card not found in Tag Force 5 database".** The `.ydk` contains a card that
   does not exist in Tag Force 5, or an ID from a different card pool.
 - **Nothing loads on startup.** The app restores the last opened file from Java

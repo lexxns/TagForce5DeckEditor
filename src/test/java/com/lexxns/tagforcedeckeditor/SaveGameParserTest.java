@@ -6,17 +6,17 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Regression tests for the recipe card layout.
  * <p>
  * The game stores the deck as three fixed-size blocks in the order
- * Main (60 slots) → Extra (15 slots) → Side (15 slots). An earlier version of
- * this editor wrote Extra and Side the other way around, which made Extra Deck
- * monsters show up in the Side Deck (as blank, unusable cards) whenever the
- * Side Deck was not full.
+ * Main (60 slots) → Side (15 slots) → Extra (15 slots), with the matching
+ * counts at 0x94 (main), 0x98 (side) and 0x9C (extra). An earlier version of
+ * this editor wrote the Side and Extra <em>counts</em> the wrong way round, so
+ * a Side Deck with fewer than 15 cards made the game read extra slots as Side
+ * Deck cards, which showed up blank and unusable.
  */
 class SaveGameParserTest {
 
@@ -24,7 +24,12 @@ class SaveGameParserTest {
     private static final int BLOCK = SaveGameParser.getRecipeBlockSize();
     private static final int CARDS_OFFSET = 0xA0;
     private static final int MAIN_BYTES = 120;
-    private static final int EXTRA_BYTES = 30;
+    private static final int SIDE_BYTES = 30;
+
+    private static final int MAIN_COUNT_OFFSET = 0x94;
+    private static final int SIDE_COUNT_OFFSET = 0x98;
+    private static final int EXTRA_COUNT_OFFSET = 0x9C;
+    private static final int MAIN_EXTRA_COUNT_OFFSET = 0x8C;
 
     private static byte[] emptySave() {
         return new byte[FILE_HEADER + BLOCK];
@@ -43,55 +48,67 @@ class SaveGameParserTest {
     }
 
     @Test
-    void extraDeckIsWrittenInTheBlockAfterTheMainDeck() {
+    void sideDeckIsWrittenInTheBlockAfterTheMainDeck() {
         byte[] data = emptySave();
         SaveGameParser parser = new SaveGameParser(data);
 
         List<Integer> main = ids(1000, 40);
-        List<Integer> extra = ids(5000, 3);
-        List<Integer> side = ids(7000, 2);
+        List<Integer> side = ids(7000, 3);
+        List<Integer> extra = ids(5000, 12);
         parser.writeDeck(FILE_HEADER, "layout", main, side, extra);
 
         int cardStart = FILE_HEADER + CARDS_OFFSET;
 
-        // Extra deck lives at +120 bytes (slot index 60), not after the side deck.
-        for (int i = 0; i < extra.size(); i++) {
-            assertEquals(extra.get(i), readUInt16(data, cardStart + MAIN_BYTES + i * 2),
-                    "extra deck card " + i + " must follow the main deck block");
-        }
-
-        // Side deck lives at +150 bytes (slot index 75), after the extra deck block.
+        // Side deck lives at +120 bytes (slot index 60).
         for (int i = 0; i < side.size(); i++) {
-            assertEquals(side.get(i), readUInt16(data, cardStart + MAIN_BYTES + EXTRA_BYTES + i * 2),
-                    "side deck card " + i + " must follow the extra deck block");
+            assertEquals(side.get(i), readUInt16(data, cardStart + MAIN_BYTES + i * 2),
+                    "side deck card " + i + " must follow the main deck block");
         }
 
-        // Unused slots stay zeroed and must never contain the extra deck cards.
-        assertNotEquals(extra.get(0), readUInt16(data, cardStart + MAIN_BYTES + EXTRA_BYTES));
+        // Extra deck lives at +150 bytes (slot index 75), after the side block.
+        for (int i = 0; i < extra.size(); i++) {
+            assertEquals(extra.get(i), readUInt16(data, cardStart + MAIN_BYTES + SIDE_BYTES + i * 2),
+                    "extra deck card " + i + " must follow the side deck block");
+        }
     }
 
     @Test
-    void shortSideDeckDoesNotMoveTheExtraDeck() {
+    void countsAreWrittenInTheSideThenExtraOrderTheGameReads() {
+        byte[] data = emptySave();
+        SaveGameParser parser = new SaveGameParser(data);
+
+        parser.writeDeck(FILE_HEADER, "counts", ids(1000, 42), ids(7000, 4), ids(5000, 12));
+
+        assertEquals(42, readUInt16(data, FILE_HEADER + MAIN_COUNT_OFFSET));
+        assertEquals(4, readUInt16(data, FILE_HEADER + SIDE_COUNT_OFFSET), "0x98 is the Side Deck count");
+        assertEquals(12, readUInt16(data, FILE_HEADER + EXTRA_COUNT_OFFSET), "0x9C is the Extra Deck count");
+        assertEquals(42 + 12, readUInt16(data, FILE_HEADER + MAIN_EXTRA_COUNT_OFFSET));
+    }
+
+    /**
+     * Mirrors the in-game failure this fix addresses: a full 15-card Extra Deck
+     * plus a short 2-card Side Deck. Writing the Side count into the Extra
+     * count field used to make the game load Extra Deck monsters as Side Deck
+     * cards.
+     */
+    @Test
+    void shortSideDeckWithFullExtraDeckKeepsBothDecksSeparate() {
         byte[] data = emptySave();
         SaveGameParser parser = new SaveGameParser(data);
 
         List<Integer> main = ids(1000, 40);
-        List<Integer> extra = ids(5000, 15);
-        List<Integer> side = ids(7000, 3); // deliberately shorter than the 15-slot block
-        parser.writeDeck(FILE_HEADER, "short side", main, side, extra);
+        List<Integer> side = ids(7000, 2);   // e.g. Cyber Dragon x2
+        List<Integer> extra = ids(5000, 15); // e.g. the Synchro/Fusion toolbox
+        parser.writeDeck(FILE_HEADER, "Roid (1)", main, side, extra);
 
-        int cardStart = FILE_HEADER + CARDS_OFFSET;
+        assertEquals(2, readUInt16(data, FILE_HEADER + SIDE_COUNT_OFFSET));
+        assertEquals(15, readUInt16(data, FILE_HEADER + EXTRA_COUNT_OFFSET));
 
-        // The full 15-card extra deck must occupy slots 60..74 even though the
-        // side deck only has 3 cards.
-        for (int i = 0; i < 15; i++) {
-            assertEquals(extra.get(i), readUInt16(data, cardStart + MAIN_BYTES + i * 2));
-        }
-
-        // The side deck must sit in slots 75..77.
-        for (int i = 0; i < side.size(); i++) {
-            assertEquals(side.get(i), readUInt16(data, cardStart + MAIN_BYTES + EXTRA_BYTES + i * 2));
-        }
+        DeckRecipe recipe = parser.parseRecipes().get(0);
+        assertEquals(side, recipe.getSideDeckIds());
+        assertEquals(extra, recipe.getExtraDeckIds());
+        assertEquals(2, recipe.getSideDeckCount());
+        assertEquals(15, recipe.getExtraDeckCount());
     }
 
     @Test
@@ -100,8 +117,8 @@ class SaveGameParserTest {
         SaveGameParser parser = new SaveGameParser(data);
 
         List<Integer> main = ids(1000, 40);
-        List<Integer> extra = ids(5000, 15);
         List<Integer> side = ids(7000, 3);
+        List<Integer> extra = ids(5000, 15);
         parser.writeDeck(FILE_HEADER, "round trip", main, side, extra);
 
         List<DeckRecipe> recipes = parser.parseRecipes();
@@ -110,24 +127,11 @@ class SaveGameParserTest {
         DeckRecipe recipe = recipes.get(0);
         assertEquals("round trip", recipe.getName());
         assertEquals(main, recipe.getMainDeckIds());
-        assertEquals(extra, recipe.getExtraDeckIds());
         assertEquals(side, recipe.getSideDeckIds());
+        assertEquals(extra, recipe.getExtraDeckIds());
         assertEquals(40, recipe.getMainDeckCount());
-        assertEquals(15, recipe.getExtraDeckCount());
         assertEquals(3, recipe.getSideDeckCount());
-    }
-
-    @Test
-    void writesCountFields() {
-        byte[] data = emptySave();
-        SaveGameParser parser = new SaveGameParser(data);
-
-        parser.writeDeck(FILE_HEADER, "counts", ids(1000, 42), ids(7000, 4), ids(5000, 12));
-
-        assertEquals(42, readUInt16(data, FILE_HEADER + 0x94));
-        assertEquals(12, readUInt16(data, FILE_HEADER + 0x98));
-        assertEquals(4, readUInt16(data, FILE_HEADER + 0x9C));
-        assertEquals(42 + 12, readUInt16(data, FILE_HEADER + 0x8C));
+        assertEquals(15, recipe.getExtraDeckCount());
     }
 
     @Test
