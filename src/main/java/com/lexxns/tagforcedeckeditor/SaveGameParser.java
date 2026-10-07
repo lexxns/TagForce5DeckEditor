@@ -19,9 +19,18 @@ import java.util.List;
  *   +0x94 (2 bytes):  Main deck card count
  *   +0x98 (2 bytes):  Extra deck card count
  *   +0x9C (2 bytes):  Side deck card count
- *   +0xA0 (var):      Main deck card IDs (2 bytes each, little endian)
- *   +0xA0 + main*2:   Extra deck card IDs
- *   +0xA0 + (main+extra)*2: Side deck card IDs
+ * <p>
+ * The card ID region is three fixed-size blocks (each ID is a little-endian
+ * uint16) and is <em>not</em> packed by card count. The game always reserves
+ * room for the maximum deck size, so a short Extra/Side deck still occupies its
+ * full block:
+ *   +0xA0 (120 bytes): Main deck card IDs  (60 slots)
+ *   +0x118 (30 bytes): Extra deck card IDs (15 slots)
+ *   +0x136 (30 bytes): Side deck card IDs  (15 slots)
+ * <p>
+ * Note the order in the file is Main, then Extra, then Side. Writing Side into
+ * the Extra block (or vice versa) makes the game load the Extra Deck monsters
+ * into the Side Deck, where they show up as blank/illegal cards.
  */
 public class SaveGameParser {
 
@@ -46,6 +55,10 @@ public class SaveGameParser {
     private static final int MAX_SIDE_CARDS = 15;
     private static final int MAX_EXTRA_CARDS = 15;
     private static final int MAX_TOTAL_CARDS = MAX_MAIN_CARDS + MAX_SIDE_CARDS + MAX_EXTRA_CARDS;
+
+    // Fixed byte size of each card block (2 bytes per card, reserved for the max size)
+    private static final int MAIN_DECK_BYTES = MAX_MAIN_CARDS * 2;   // 120
+    private static final int EXTRA_DECK_BYTES = MAX_EXTRA_CARDS * 2; // 30
 
     public SaveGameParser(byte[] data) {
         this.data = data;
@@ -112,13 +125,15 @@ public class SaveGameParser {
         int cardRegionStart = recipeOffset + CARD_IDS_OFFSET;
         zeroRegion(cardRegionStart, MAX_TOTAL_CARDS * 2);
 
-        // Write CONTIGUOUSLY: Main → Extra → Side
+        // Write into the game's fixed-size blocks: Main → Extra → Side.
+        // Each block is reserved at its maximum size regardless of the actual
+        // count, so a short Side Deck does not shift the Extra Deck.
         int offset = cardRegionStart;
-        writeCardIds(offset, mainDeck);    // Main deck
-        offset += 120;
-        writeCardIds(offset, sideDeck);     // Side deck
-        offset += 30;
-        writeCardIds(offset, extraDeck);   // Extra deck
+        writeCardIds(offset, mainDeck);      // Main deck:  60 slots
+        offset += MAIN_DECK_BYTES;
+        writeCardIds(offset, extraDeck);     // Extra deck: 15 slots
+        offset += EXTRA_DECK_BYTES;
+        writeCardIds(offset, sideDeck);      // Side deck:  15 slots
     }
 
     /**
@@ -239,13 +254,14 @@ public class SaveGameParser {
 
         int cardOffset = offset + CARD_IDS_OFFSET;
 
+        // Fixed-size blocks: Main (60) → Extra (15) → Side (15)
         List<Integer> mainDeckIds = readCardIds(cardOffset, mainCount);
-        cardOffset += 120;
-
-        List<Integer> sideDeckIds = readCardIds(cardOffset, sideCount);
-        cardOffset += 30;
+        cardOffset += MAIN_DECK_BYTES;
 
         List<Integer> extraDeckIds = readCardIds(cardOffset, extraCount);
+        cardOffset += EXTRA_DECK_BYTES;
+
+        List<Integer> sideDeckIds = readCardIds(cardOffset, sideCount);
 
         DeckRecipe recipe = new DeckRecipe(
                 index,
